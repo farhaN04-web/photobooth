@@ -15,10 +15,23 @@ export interface Photo {
 }
 
 // Filter
-export type FilterType = 'normal' | 'grayscale' | 'sepia' | 'blur' | 'brightness'
+export type FilterType =
+  | 'normal'
+  | 'grayscale'
+  | 'sepia'
+  | 'blur'
+  | 'brightness'
+  | 'clarendon'
+  | 'gingham'
+  | 'juno'
+  | 'lark'
+  | 'aden'
+  | 'perpetua'
 
 // Layout
 export type PhotoMode = 'single' | 'strip'
+export type AspectRatio = '1:1' | '4:5' | '16:9'
+export type FaceEffectType = 'none' | 'blush' | 'freckles' | 'flowers' | 'glitter'
 
 export default function Home() {
   // State untuk menyimpan stream kamera
@@ -29,6 +42,11 @@ export default function Home() {
   const [photoStrips, setPhotoStrips] = useState<PhotoStrip[]>([])
   // State untuk mode photobooth
   const [photoMode, setPhotoMode] = useState<PhotoMode>('strip')
+  // State untuk rasio foto (layout Instagram)
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>('1:1')
+  const [faceEffect, setFaceEffect] = useState<FaceEffectType>('none')
+  // Beauty smoothing intensity (0-100)
+  const [beautyIntensity, setBeautyIntensity] = useState<number>(0)
   // State untuk jumlah foto per strip
   const [photosPerStrip, setPhotosPerStrip] = useState(4)
   // State untuk foto sementara saat membuat strip
@@ -48,6 +66,8 @@ export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null)
   // Ref untuk canvas element (untuk capture)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  // Ref untuk overlay wajah (canvas dari FaceEffectsOverlay)
+  const faceOverlayCanvasRef = useRef<HTMLCanvasElement>(null)
 
   // Fungsi untuk mendapatkan daftar kamera yang tersedia
   useEffect(() => {
@@ -116,6 +136,26 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentCameraIndex])
 
+  // Fungsi bantu: hitung crop center sesuai rasio
+  const getCropForAspect = (video: HTMLVideoElement, ratio: AspectRatio) => {
+    const vw = video.videoWidth
+    const vh = video.videoHeight
+    const target =
+      ratio === '1:1' ? 1 / 1 : ratio === '4:5' ? 4 / 5 : 16 / 9
+    const source = vw / vh
+    if (source > target) {
+      // terlalu lebar, crop horizontal
+      const newWidth = vh * target
+      const sx = (vw - newWidth) / 2
+      return { sx, sy: 0, sw: newWidth, sh: vh }
+    } else {
+      // terlalu tinggi, crop vertikal
+      const newHeight = vw / target
+      const sy = (vh - newHeight) / 2
+      return { sx: 0, sy, sw: vw, sh: newHeight }
+    }
+  }
+
   // Fungsi untuk mengambil foto
   const capturePhoto = () => {
     if (!videoRef.current || !canvasRef.current) return
@@ -126,15 +166,42 @@ export default function Home() {
 
     if (!ctx) return
 
-    // Set ukuran canvas sesuai video
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
+    // Tentukan ukuran canvas sesuai rasio terpilih (gaya Instagram)
+    const ratio =
+      aspectRatio === '1:1' ? 1 / 1 : aspectRatio === '4:5' ? 4 / 5 : 16 / 9
+    const base = 1080 // ukuran basis resolusi ekspor
+    canvas.width = base
+    canvas.height = Math.round(base / ratio)
 
     // Terapkan filter CSS ke canvas
     ctx.filter = getFilterCSS(activeFilter)
 
-    // Gambar frame video ke canvas
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    // Hitung crop dari video ke canvas (center-crop)
+    const { sx, sy, sw, sh } = getCropForAspect(video, aspectRatio)
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
+
+    // Komposisikan face overlay canvas (jika tersedia)
+    if (faceOverlayCanvasRef.current) {
+      try {
+        // Skala overlay ke ukuran output
+        ctx.drawImage(
+          faceOverlayCanvasRef.current,
+          sx,
+          sy,
+          sw,
+          sh,
+          0,
+          0,
+          canvas.width,
+          canvas.height
+        )
+      } catch {
+        // ignore
+      }
+    }
+
+    // Overlay tambahan untuk beberapa filter ala Instagram
+    applyFilterOverlay(ctx, canvas.width, canvas.height, activeFilter)
 
     // Tambahkan watermark
     addWatermark(ctx, canvas.width, canvas.height)
@@ -189,9 +256,68 @@ export default function Home() {
         return 'blur(2px)'
       case 'brightness':
         return 'brightness(1.3)'
+      case 'clarendon':
+        return 'contrast(1.2) saturate(1.35) brightness(1.05)'
+      case 'gingham':
+        return 'brightness(1.05) hue-rotate(-10deg)'
+      case 'juno':
+        return 'saturate(1.4) contrast(1.15)'
+      case 'lark':
+        return 'brightness(1.1) saturate(1.1)'
+      case 'aden':
+        return 'hue-rotate(-20deg) saturate(0.85) brightness(1.05)'
+      case 'perpetua':
+        return 'saturate(1.1) contrast(1.05)'
       default:
         return 'none'
     }
+  }
+
+  // Overlay halus untuk meniru beberapa filter (di atas gambar)
+  const applyFilterOverlay = (
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    filter: FilterType
+  ) => {
+    ctx.save()
+    switch (filter) {
+      case 'clarendon': {
+        // Biru lembut di shadow
+        const grad = ctx.createLinearGradient(0, 0, 0, height)
+        grad.addColorStop(0, 'rgba(0, 20, 60, 0.10)')
+        grad.addColorStop(1, 'rgba(255, 255, 255, 0)')
+        ctx.fillStyle = grad
+        ctx.fillRect(0, 0, width, height)
+        break
+      }
+      case 'gingham': {
+        ctx.fillStyle = 'rgba(230, 230, 255, 0.15)'
+        ctx.fillRect(0, 0, width, height)
+        break
+      }
+      case 'juno': {
+        ctx.fillStyle = 'rgba(255, 180, 120, 0.10)'
+        ctx.fillRect(0, 0, width, height)
+        break
+      }
+      case 'aden': {
+        ctx.fillStyle = 'rgba(230, 245, 255, 0.18)'
+        ctx.fillRect(0, 0, width, height)
+        break
+      }
+      case 'perpetua': {
+        const grad = ctx.createLinearGradient(0, 0, 0, height)
+        grad.addColorStop(0, 'rgba(0, 90, 255, 0.10)')
+        grad.addColorStop(1, 'rgba(0, 255, 180, 0.08)')
+        ctx.fillStyle = grad
+        ctx.fillRect(0, 0, width, height)
+        break
+      }
+      default:
+        break
+    }
+    ctx.restore()
   }
 
   // Fungsi untuk menambahkan watermark
@@ -389,6 +515,10 @@ export default function Home() {
             stream={stream}
             activeFilter={activeFilter}
             isMirrorMode={isMirrorMode}
+            aspectRatio={aspectRatio}
+            faceEffect={faceEffect}
+            overlayCanvasRef={faceOverlayCanvasRef}
+            beautyIntensity={beautyIntensity}
           />
         </div>
 
@@ -436,6 +566,12 @@ export default function Home() {
           onPhotoModeChange={setPhotoMode}
           photosPerStrip={photosPerStrip}
           onPhotosPerStripChange={setPhotosPerStrip}
+          aspectRatio={aspectRatio}
+          onAspectRatioChange={setAspectRatio}
+          faceEffect={faceEffect}
+          onFaceEffectChange={setFaceEffect}
+          beautyIntensity={beautyIntensity}
+          onBeautyIntensityChange={setBeautyIntensity}
         />
 
         {/* Photo Gallery - Mode Single */}
